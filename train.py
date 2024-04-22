@@ -86,7 +86,6 @@ def training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_m
                 metric = dice_metric.aggregate().item()
                 metric_values.append(metric)
                 metric_batch = dice_metric_batch.aggregate()
-                metric_batch = dice_metric_batch.aggregate()
 
                 metric_tc = metric_batch[0].item()
                 metric_wt = metric_batch[1].item()
