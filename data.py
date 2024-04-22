@@ -1,11 +1,12 @@
 from utils import ConvertToMultiChannelBasedOnBratsClassesd
 from monai.transforms import (Activations,Activationsd,AsDiscrete,AsDiscreted,Compose,Invertd,LoadImaged,NormalizeIntensityd,Orientationd,RandFlipd,RandScaleIntensityd,RandSpatialCropd,Spacingd,EnsureTyped,EnsureChannelFirstd,RandShiftIntensityd)
 import matplotlib.pyplot as plt
-from monai.apps import DecathlonDataset
 from monai.losses import DiceLoss
 from monai.metrics import DiceMetric
-from monai.data import DataLoader
+from monai.data import CacheDataset, DataLoader, Dataset
 import torch 
+import os
+import glob
 
 
 train_transform = Compose(
@@ -14,16 +15,10 @@ train_transform = Compose(
         LoadImaged(keys=["image", "label"]),
         EnsureChannelFirstd(keys="image"),
         EnsureTyped(keys=["image", "label"]),
-
         ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
-        
         Orientationd(keys=["image", "label"], axcodes="RAS"),
-        Spacingd(
-            keys=["image", "label"],
-            pixdim=(1.0, 1.0, 1.0),
-            mode=("bilinear", "nearest"),
-        ),
-        RandSpatialCropd(keys=["image", "label"], roi_size=[224, 224, 144], random_size=False),
+        Spacingd(keys=["image", "label"],pixdim=(1.0, 1.0, 1.0),mode=("bilinear", "nearest"),),
+        RandSpatialCropd(keys=["image", "label"], roi_size=[128, 128, 128], random_size=False),
         RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
         RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
         RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
@@ -48,27 +43,40 @@ val_transform = Compose(
     ]
 )
 
+class BTSegDataset(Dataset):
+    def __init__(self, file_names, transform):
+        self.file_names = file_names
+        self.transform = transform
+
+    def __getitem__(self, index):
+        file_names = self.file_names[index]
+        dataset = self.transform(file_names) 
+        return dataset
+    
+    def __len__(self):
+        return len(self.file_names)
+
+
 def get_data(root_dir):
+    train_images = sorted(glob.glob(os.path.join(root_dir, "imagesTr", "*.nii.gz")))
+    train_labels = sorted(glob.glob(os.path.join(root_dir, "labelsTr", "*.nii.gz")))
 
-    train_ds = DecathlonDataset(
-        root_dir=root_dir,
-        task="Task01_BrainTumour",
-        transform=train_transform,
-        section="training",
-        download=True,
-        cache_rate=0.0,
-        num_workers=4)
+    data_dicts = [{"image": image_name, "label": label_name} for image_name, label_name in zip(train_images, train_labels)]
+    train_files, val_files = data_dicts[:-9], data_dicts[-9:]
 
+    # print(train_files[0])
+    # print(os.path.exists(train_files[0]['label']))
+
+    # CacheDataset to accelerate training and validation process, it's 10x faster than the regular Dataset.
+
+    # train_ds = CacheDataset(data=train_files, transform=train_transform, cache_rate=1.0, num_workers=4)
+    # train_ds = Dataset(data=train_files, transform=train_transform)
+    train_ds = BTSegDataset(train_files, train_transform)
     train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=4)
 
-    val_ds = DecathlonDataset(
-        root_dir=root_dir,
-        task="Task01_BrainTumour",
-        transform=val_transform,
-        section="validation",
-        download=False,
-        cache_rate=0.0,
-        num_workers=4)
+    # val_ds = CacheDataset(data=val_files, transform=val_transform, cache_rate=1.0, num_workers=4)
+    # val_ds = Dataset(data=val_files, transform=val_transform)
+    val_ds = BTSegDataset(val_files, val_transform)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4)
 
     return train_loader, val_loader
