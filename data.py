@@ -7,6 +7,7 @@ from monai.data import CacheDataset, DataLoader, Dataset
 import torch 
 import os
 import glob
+from monai.utils import set_determinism
 
 
 train_transform = Compose(
@@ -71,6 +72,9 @@ def get_data(root_dir):
 
     # train_ds = CacheDataset(data=train_files, transform=train_transform, cache_rate=1.0, num_workers=4)
     # train_ds = Dataset(data=train_files, transform=train_transform)
+    
+    set_determinism(seed=12345)
+
     train_ds = BTSegDataset(train_files, train_transform)
     train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=4)
 
@@ -79,4 +83,4 @@ def get_data(root_dir):
     val_ds = BTSegDataset(val_files, val_transform)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4)
 
-    return train_loader, val_loader
+    return train_loader, val_loader, train_ds, val_ds
