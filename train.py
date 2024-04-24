@@ -9,9 +9,11 @@ from monai.networks.layers import Norm
 from monai.losses import DiceLoss
 from monai.metrics import DiceMetric
 from monai.transforms import Compose, Activations, AsDiscrete
-from monai.inferers import sliding_window_inference
 from tqdm import tqdm
 from monai.data import decollate_batch 
+from utils import inference
+import matplotlib.pyplot as plt
+
 
 
 # use amp to accelerate training
@@ -20,22 +22,7 @@ scaler = torch.cuda.amp.GradScaler()
 torch.backends.cudnn.benchmark = True
 
 
-# define inference method
-def inference(input, VAL_AMP):
-    def _compute(input):
-        return sliding_window_inference(
-            inputs=input,
-            roi_size=(240, 240, 160),
-            sw_batch_size=1,
-            predictor=model,
-            overlap=0.5,
-        )
 
-    if VAL_AMP:
-        with torch.cuda.amp.autocast():
-            return _compute(input)
-    else:
-        return _compute(input)
 
 def training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_metric_batch, post_trans, max_epochs,device):
     val_interval = 1
@@ -77,14 +64,18 @@ def training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_m
         if (epoch +1) % val_interval ==0:
             model.eval()
             with torch.no_grad():
-                for val_data in tqdm(val_loader, desc=f'Training Epoch {epoch}/{max_epochs}', unit='epoch'):
+                for val_data in tqdm(val_loader, desc=f'Val Epoch {epoch}/{max_epochs}', unit='epoch'):
                     val_inputs, val_labels = (val_data["image"].to(device),val_data["label"].to(device))
-                    val_outputs = inference(val_inputs, VAL_AMP)
+                    val_outputs = inference(val_inputs, VAL_AMP, model)
                     val_outputs = [post_trans(i) for i in decollate_batch(val_outputs)]
                     dice_metric(y_pred=val_outputs, y=val_labels)
+                    dice_metric_batch(y_pred=val_outputs, y=val_labels)
 
                 metric = dice_metric.aggregate().item()
                 metric_values.append(metric)
+
+                # print(dice_metric_batch.aggregate()) # tensor([0.0106, 0.0196, 0.0186], device='cuda:0')
+
                 metric_batch = dice_metric_batch.aggregate()
 
                 metric_tc = metric_batch[0].item()
@@ -101,10 +92,14 @@ def training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_m
                 if metric > best_metric:
                     best_metric = metric
                     best_metric_epoch = epoch+1
-                    torch.save(
-                        model.state_dict(), 
-                        os.path.join("best_metric_model.pth")
-                        )
+
+                    torch.save({
+                        'epoch':epoch,
+                        'model_state_dict':model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'loss':loss,
+                        }, "best_metric_model.pth")
+                    
                     print("saved new best metric model")
                     print(
                         f"current epoch: {epoch + 1} current mean dice: {metric:.4f}"
@@ -112,12 +107,19 @@ def training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_m
                         f"\nbest mean dice: {best_metric:.4f}"
                         f" at epoch: {best_metric_epoch}"
                     )
+    return epoch_loss_values, metric_values, metric_values_TC, metric_values_WT, metric_values_ET, val_interval
 
 if __name__ == "__main__":
-    max_epochs = 300
+
+    # Because of RuntimeError: received 0 items of ancdata
+    import resource
+    rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (2048, rlimit[1]))
+
+    max_epochs = 2
     root_dir = "/mnt/Enterprise2/shirshak/Task01_BrainTumour"
 
-    train_loader, val_loader = get_data(root_dir)
+    train_loader, val_loader,_ ,_ = get_data(root_dir)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -138,7 +140,94 @@ if __name__ == "__main__":
 
     post_trans = Compose([Activations(sigmoid=True), AsDiscrete(threshold=0.5)])
 
-    training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_metric_batch, post_trans,max_epochs,device)
+    epoch_loss_values, metric_values, metric_values_TC, metric_values_WT, metric_values_ET, val_interval = training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_metric_batch, post_trans,max_epochs,device)
+
+    # Plot figures
+    fig, ax = plt.subplots(2)
+
+    x = [i + 1 for i in range(len(epoch_loss_values))]
+    y = epoch_loss_values
+    ax[0].set_title("Epoch Average Loss")
+    ax[0].plot(x, y, color="red")
+
+    x = [val_interval * (i + 1) for i in range(len(metric_values))]
+    y = metric_values
+    ax[1].set_title("Val Mean Dice")
+    ax[1].plot(x, y, color="green")
+
+    # To make some spacing between two plots
+    fig.tight_layout()
+
+    fig.savefig(f'plots/loss&dice.png')
+
+
+    fig, ax = plt.subplots(3)
+
+    plt.figure(figsize=(100,60))
+
+    x = [val_interval * (i + 1) for i in range(len(metric_values_TC))]
+    y = metric_values_TC
+    ax[0].set_title("Val Mean Dice TC")
+    ax[0].plot(x, y, color="blue")
+
+    x = [val_interval * (i + 1) for i in range(len(metric_values_WT))]
+    y = metric_values_WT
+    ax[1].set_title("Val Mean Dice WT")
+    ax[1].plot(x, y, color="brown")
+
+    x = [val_interval * (i + 1) for i in range(len(metric_values_ET))]
+    y = metric_values_ET
+    ax[2].set_title("Val Mean Dice ET")
+    ax[2].plot(x, y, color="purple")
+
+    fig.tight_layout()
+    fig.savefig(f'plots/dice_TC_WT_ET.png')
+
+    # Check best model output with input image & label 
+
+
+
+    checkpoint = torch.load("best_metric_model.pth")
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    epoch = checkpoint['epoch']
+    loss = checkpoint['loss']
+    model.eval() 
+    with torch.no_grad():
+        _,_,_,val_ds = get_data(root_dir)
+        val_input = val_ds[6]["image"].unsqueeze(0).to(device)
+        roi_size = (128, 128, 64)
+        sw_batch_size = 4
+        VAL_AMP = True
+        val_output = inference(val_input, VAL_AMP, model)
+        val_output = post_trans(val_output[0])
+
+        fig, ax = plt.subplots(1,4)
+        for i in range(4):
+            ax[i].set_title(f"image Channel {i}")
+            ax[i].imshow(val_ds[6]["image"][i, :, :, 70].detach().cpu(), cmap="gray")
+        fig.tight_layout()
+        fig.savefig(f'images/image_across_channel.png')
+
+        fig, ax = plt.subplots(1,3)
+        for i in range(3):
+            ax[i].set_title(f"label channel {i}")
+            ax[i].imshow(val_ds[6]["label"][i, :, :, 70].detach().cpu())
+        fig.tight_layout()
+        fig.savefig(f'images/y_true_labels_across_channel.png')
+
+        fig, ax = plt.subplots(1,3)
+        for i in range(3):
+            ax[i].set_title(f"output channel {i}")
+            ax[i].imshow(val_output[i, :, :, 70].detach().cpu())
+        fig.tight_layout()
+        fig.savefig(f'images/y_pred_labels_across_channel.png')
+
+
+
+
+    
+
 
 
 
