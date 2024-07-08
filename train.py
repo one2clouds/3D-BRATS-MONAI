@@ -13,6 +13,7 @@ from tqdm import tqdm
 from monai.data import decollate_batch 
 from utils import inference
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 
@@ -59,8 +60,7 @@ def training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_m
         epoch_loss /= step
         epoch_loss_values.append(epoch_loss)
 
-        print(f"Epoch {epoch+1} Avg. train loss: {epoch_loss:.4f}")
-
+        
         if (epoch +1) % val_interval ==0:
             model.eval()
             with torch.no_grad():
@@ -68,8 +68,16 @@ def training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_m
                     val_inputs, val_labels = (val_data["image"].to(device),val_data["label"].to(device))
                     val_outputs = inference(val_inputs, VAL_AMP, model)
                     val_outputs = [post_trans(i) for i in decollate_batch(val_outputs)]
-                    dice_metric(y_pred=val_outputs, y=val_labels)
-                    dice_metric_batch(y_pred=val_outputs, y=val_labels)
+                    
+                    # print(np.unique(np.stack(val_outputs)))
+                    # print(np.stack(val_outputs).shape) # (1, 3, 240, 240, 155)
+                    # print(np.stack(val_labels).shape)# (1, 3, 240, 240, 155)
+
+                    temp_val_out= torch.as_tensor(np.stack(val_outputs)).squeeze(dim=0).argmax(0)
+                    temp_val_label = torch.as_tensor(np.stack(val_labels)).squeeze(dim=0).argmax(0)
+
+                    dice_metric(y_pred=temp_val_out, y=temp_val_label)
+                    dice_metric_batch(y_pred=temp_val_out, y=temp_val_label)
 
                 metric = dice_metric.aggregate().item()
                 metric_values.append(metric)
@@ -102,7 +110,8 @@ def training_phase(model,loss_function,optimizer,lr_scheduler,dice_metric,dice_m
                     
                     print("saved new best metric model")
                     print(
-                        f"current epoch: {epoch + 1} current mean dice: {metric:.4f}"
+                        f"Epoch {epoch+1} Avg. train loss: {epoch_loss:.4f}"
+                        f"\n current epoch: {epoch + 1} current mean dice: {metric:.4f}"
                         f" tc: {metric_tc:.4f} wt: {metric_wt:.4f} et: {metric_et:.4f}"
                         f"\nbest mean dice: {best_metric:.4f}"
                         f" at epoch: {best_metric_epoch}"
@@ -116,10 +125,10 @@ if __name__ == "__main__":
     rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (2048, rlimit[1]))
 
-    max_epochs = 2
+    max_epochs = 5
     root_dir = "/mnt/Enterprise2/shirshak/Task01_BrainTumour"
 
-    train_loader, val_loader,_ ,_ = get_data(root_dir)
+    train_loader, val_loader,_ ,_, _, _ = get_data(root_dir)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -194,7 +203,7 @@ if __name__ == "__main__":
     loss = checkpoint['loss']
     model.eval() 
     with torch.no_grad():
-        _,_,_,val_ds = get_data(root_dir)
+        _,_,_,val_ds, _, _ = get_data(root_dir)
         val_input = val_ds[6]["image"].unsqueeze(0).to(device)
         roi_size = (128, 128, 64)
         sw_batch_size = 4

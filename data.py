@@ -55,10 +55,11 @@ class BTSegDataset(Dataset):
         return dataset
     
     def __len__(self):
-        return len(self.file_names)
+        return 1#len(self.file_names)
 
 
 def get_data(root_dir):
+    set_determinism(seed=12345)
     train_images = sorted(glob.glob(os.path.join(root_dir, "imagesTr", "*.nii.gz")))
     train_labels = sorted(glob.glob(os.path.join(root_dir, "labelsTr", "*.nii.gz")))
 
@@ -73,8 +74,6 @@ def get_data(root_dir):
     # train_ds = CacheDataset(data=train_files, transform=train_transform, cache_rate=1.0, num_workers=4)
     # train_ds = Dataset(data=train_files, transform=train_transform)
     
-    set_determinism(seed=12345)
-
     train_ds = BTSegDataset(train_files, train_transform)
     train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=4)
 
@@ -83,4 +82,4 @@ def get_data(root_dir):
     val_ds = BTSegDataset(val_files, val_transform)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4)
 
-    return train_loader, val_loader, train_ds, val_ds
+    return train_loader, val_loader, train_ds, val_ds, train_files, val_files

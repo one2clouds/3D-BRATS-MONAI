@@ -10,6 +10,8 @@ from monai.metrics import DiceMetric
 from monai.handlers.utils import from_engine
 from monai.transforms import Compose, Invertd, Activationsd, AsDiscreted,EnsureTyped, LoadImaged, EnsureChannelFirstd, Orientationd, Spacingd, NormalizeIntensityd
 from utils import ConvertToMultiChannelBasedOnBratsClassesd
+from data import BTSegDataset
+from monai.data import DataLoader
 
 
 val_org_transforms = Compose([
@@ -56,7 +58,12 @@ if __name__ =="__main__":
     
     root_dir = "/mnt/Enterprise2/shirshak/Task01_BrainTumour"
     
-    train_loader, val_loader = get_data(root_dir)
+    _, _, _,_, _, val_files = get_data(root_dir)
+
+    val_org_ds = BTSegDataset(val_files,val_org_transforms)
+
+    val_org_loader = DataLoader(val_org_ds, batch_size=1, shuffle=False, num_workers=4)
+
     optimizer = torch.optim.Adam(model.parameters(), 1e-4, weight_decay=1e-5)
  
 
@@ -69,7 +76,7 @@ if __name__ =="__main__":
     
 
     with torch.no_grad():
-        for val_data in val_loader:
+        for val_data in val_org_loader:
             val_inputs = val_data["image"].to(device)
             val_data["pred"] = inference(val_inputs, VAL_AMP, model)
             val_data = [post_transforms(i) for i in decollate_batch(val_data)]
